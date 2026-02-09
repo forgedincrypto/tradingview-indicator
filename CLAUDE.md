@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Single-file TradingView Pine Script v5 indicator: `BB_Dual_Mode_Ichimoku_Regime.pine`. No build system, tests, or dependencies — the script is copied directly into the TradingView Pine Editor.
+Single-file TradingView Pine Script v5 indicator: `BB_Dual_Mode_RSI_MACD_Regime.pine`. No build system, tests, or dependencies — the script is copied directly into the TradingView Pine Editor.
 
 ## Architecture
 
