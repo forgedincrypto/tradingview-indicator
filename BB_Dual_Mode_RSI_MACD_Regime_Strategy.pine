@@ -1,0 +1,178 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0
+// https://mozilla.org/MPL/2.0/
+// © BB Dual Mode + 1H RSI/MACD Regime Weight (Directional) — Strategy
+
+//@version=5
+strategy("BB Dual Mode + 1H RSI/MACD Regime (Strategy)", overlay=true, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=100, commission_type=strategy.commission.percent, commission_value=0.1, pyramiding=0)
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 1. INPUTS
+// ──────────────────────────────────────────────────────────────────────────────
+
+// A) Bollinger Bands (15m)
+grpBB = "Bollinger Bands (15m)"
+bbLen  = input.int(20, "BB Length", minval=2, group=grpBB)
+bbMult = input.float(2.0, "BB Multiplier", minval=0.1, step=0.1, group=grpBB)
+bbSrc  = input.source(close, "BB Source", group=grpBB)
+
+// B) RSI + MACD (1H)
+grpRM = "RSI + MACD (1H)"
+htfTf      = input.timeframe("60", "HTF Timeframe", group=grpRM)
+rsiLen     = input.int(14, "RSI Length", minval=1, group=grpRM)
+rsiBullLevel = input.int(50, "RSI Bullish Threshold", minval=1, maxval=100, group=grpRM)
+rsiBearLevel = input.int(50, "RSI Bearish Threshold", minval=1, maxval=100, group=grpRM)
+macdFast   = input.int(12, "MACD Fast Length", minval=1, group=grpRM)
+macdSlow   = input.int(26, "MACD Slow Length", minval=1, group=grpRM)
+macdSignal = input.int(9, "MACD Signal Length", minval=1, group=grpRM)
+
+// C) Scoring threshold + display
+grpDisp = "Display"
+minScoreToShow = input.float(0.5, "Min Score to Show Signal", minval=0.0, maxval=1.0, step=0.1, group=grpDisp)
+showTextLabels = input.bool(false, "Show Text Labels", group=grpDisp)
+
+// D) Weights — Mean Reversion (directional)
+grpRevW = "Weights: Mean Reversion"
+revLongBull  = input.float(1.0, "Rev Long  — Bullish",  minval=0.0, maxval=2.0, step=0.1, group=grpRevW)
+revLongSide  = input.float(1.0, "Rev Long  — Sideways", minval=0.0, maxval=2.0, step=0.1, group=grpRevW)
+revLongBear  = input.float(0.2, "Rev Long  — Bearish",  minval=0.0, maxval=2.0, step=0.1, group=grpRevW)
+revShortBull = input.float(0.2, "Rev Short — Bullish",  minval=0.0, maxval=2.0, step=0.1, group=grpRevW)
+revShortSide = input.float(1.0, "Rev Short — Sideways", minval=0.0, maxval=2.0, step=0.1, group=grpRevW)
+revShortBear = input.float(1.0, "Rev Short — Bearish",  minval=0.0, maxval=2.0, step=0.1, group=grpRevW)
+
+// D) Weights — Breakout (directional)
+grpBrkW = "Weights: Breakout"
+brkLongBull  = input.float(1.0, "Brk Long  — Bullish",  minval=0.0, maxval=2.0, step=0.1, group=grpBrkW)
+brkLongSide  = input.float(0.3, "Brk Long  — Sideways", minval=0.0, maxval=2.0, step=0.1, group=grpBrkW)
+brkLongBear  = input.float(0.0, "Brk Long  — Bearish",  minval=0.0, maxval=2.0, step=0.1, group=grpBrkW)
+brkShortBull = input.float(0.0, "Brk Short — Bullish",  minval=0.0, maxval=2.0, step=0.1, group=grpBrkW)
+brkShortSide = input.float(0.3, "Brk Short — Sideways", minval=0.0, maxval=2.0, step=0.1, group=grpBrkW)
+brkShortBear = input.float(1.0, "Brk Short — Bearish",  minval=0.0, maxval=2.0, step=0.1, group=grpBrkW)
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 2. 1H RSI/MACD REGIME (non-repainting)
+// ──────────────────────────────────────────────────────────────────────────────
+
+// Compute RSI and MACD on HTF, return regime as single int.
+// Both must agree for a directional regime; otherwise sideways.
+// Using confirmed (closed) HTF bars only — lookahead_off prevents future leak.
+htfRegime() =>
+    _rsi = ta.rsi(close, rsiLen)
+    [_macdLine, _signalLine, _] = ta.macd(close, macdFast, macdSlow, macdSignal)
+    _rsiBull = _rsi > rsiBullLevel
+    _rsiBear = _rsi < rsiBearLevel
+    _macdBull = _macdLine > _signalLine
+    _macdBear = _macdLine < _signalLine
+    _bull = _rsiBull and _macdBull
+    _bear = _rsiBear and _macdBear
+    _regime = _bull ? 1 : _bear ? -1 : 0
+    _regime
+
+regime = request.security(syminfo.tickerid, htfTf, htfRegime(), barmerge.gaps_off, barmerge.lookahead_off)
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 3. 15m BOLLINGER BANDS
+// ──────────────────────────────────────────────────────────────────────────────
+
+basis = ta.sma(bbSrc, bbLen)
+dev   = bbMult * ta.stdev(bbSrc, bbLen)
+upper = basis + dev
+lower = basis - dev
+
+pBasis = plot(basis, "BB Basis", color=color.new(color.orange, 0), linewidth=1)
+pUpper = plot(upper, "BB Upper", color=color.new(color.blue, 0), linewidth=1)
+pLower = plot(lower, "BB Lower", color=color.new(color.blue, 0), linewidth=1)
+fill(pUpper, pLower, color=color.new(color.blue, 92), title="BB Fill")
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 4. SIGNAL DEFINITIONS
+// ──────────────────────────────────────────────────────────────────────────────
+
+// Mean Reversion — cross back inside the band
+revLong  = close[1] < lower[1] and close > lower
+revShort = close[1] > upper[1] and close < upper
+
+// Breakout — cross the band outward
+brkLong  = ta.crossover(close, upper)
+brkShort = ta.crossunder(close, lower)
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 5. SCORE / WEIGHT LOGIC (directional)
+// ──────────────────────────────────────────────────────────────────────────────
+
+scoreForRegime(int _regime, float wBull, float wSide, float wBear) =>
+    _regime == 1 ? wBull : _regime == -1 ? wBear : wSide
+
+revLongScore  = scoreForRegime(regime, revLongBull,  revLongSide,  revLongBear)
+revShortScore = scoreForRegime(regime, revShortBull, revShortSide, revShortBear)
+brkLongScore  = scoreForRegime(regime, brkLongBull,  brkLongSide,  brkLongBear)
+brkShortScore = scoreForRegime(regime, brkShortBull, brkShortSide, brkShortBear)
+
+// Qualification: signal fired AND score meets threshold
+revLongQ  = revLong  and revLongScore  >= minScoreToShow
+revShortQ = revShort and revShortScore >= minScoreToShow
+brkLongQ  = brkLong  and brkLongScore  >= minScoreToShow
+brkShortQ = brkShort and brkShortScore >= minScoreToShow
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 5B. STRATEGY ENTRIES / EXITS
+// ──────────────────────────────────────────────────────────────────────────────
+
+// Long signals
+if revLongQ
+    strategy.close("REV Short")
+    strategy.close("BRK Short")
+    strategy.entry("REV Long", strategy.long)
+
+if brkLongQ
+    strategy.close("REV Short")
+    strategy.close("BRK Short")
+    strategy.entry("BRK Long", strategy.long)
+
+// Short signals
+if revShortQ
+    strategy.close("REV Long")
+    strategy.close("BRK Long")
+    strategy.entry("REV Short", strategy.short)
+
+if brkShortQ
+    strategy.close("REV Long")
+    strategy.close("BRK Long")
+    strategy.entry("BRK Short", strategy.short)
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 6. VISUAL OUTPUTS
+// ──────────────────────────────────────────────────────────────────────────────
+
+// A) Regime info table (top-right)
+regimeText  = regime == 1 ? "Bullish" : regime == -1 ? "Bearish" : "Sideways"
+regimeColor = regime == 1 ? color.green : regime == -1 ? color.red : color.gray
+
+var table regimeTable = table.new(position.top_right, 1, 1, bgcolor=color.new(color.black, 70), border_width=1)
+if barstate.islast
+    table.cell(regimeTable, 0, 0, "1H RSI/MACD: " + regimeText, text_color=regimeColor, text_size=size.normal)
+
+// B) Plot shapes for qualified signals
+// Mean Reversion — triangles
+plotshape(revLongQ,  title="REV Long",  style=shape.triangleup,   location=location.belowbar, color=color.new(color.lime, 0),  size=size.small)
+plotshape(revShortQ, title="REV Short", style=shape.triangledown, location=location.abovebar, color=color.new(color.fuchsia, 0), size=size.small)
+// Breakout — arrows (label-style arrows for visual distinction)
+plotshape(brkLongQ,  title="BRK Long",  style=shape.arrowup,   location=location.belowbar, color=color.new(color.teal, 0),    size=size.small)
+plotshape(brkShortQ, title="BRK Short", style=shape.arrowdown, location=location.abovebar, color=color.new(color.maroon, 0),  size=size.small)
+
+// C) Optional text labels with score
+if showTextLabels and revLongQ
+    label.new(bar_index, low, "REV L (" + str.tostring(revLongScore, "#.#") + ")", style=label.style_label_up, color=color.new(color.lime, 80), textcolor=color.lime, size=size.small)
+if showTextLabels and revShortQ
+    label.new(bar_index, high, "REV S (" + str.tostring(revShortScore, "#.#") + ")", style=label.style_label_down, color=color.new(color.fuchsia, 80), textcolor=color.fuchsia, size=size.small)
+if showTextLabels and brkLongQ
+    label.new(bar_index, low, "BRK L (" + str.tostring(brkLongScore, "#.#") + ")", style=label.style_label_up, color=color.new(color.teal, 80), textcolor=color.teal, size=size.small)
+if showTextLabels and brkShortQ
+    label.new(bar_index, high, "BRK S (" + str.tostring(brkShortScore, "#.#") + ")", style=label.style_label_down, color=color.new(color.maroon, 80), textcolor=color.maroon, size=size.small)
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 7. TIMEFRAME WARNING
+// ──────────────────────────────────────────────────────────────────────────────
+
+var table tfWarn = table.new(position.bottom_right, 1, 1, bgcolor=color.new(color.black, 70), border_width=1)
+if barstate.islast and timeframe.period != "15"
+    table.cell(tfWarn, 0, 0, "⚠ Designed for 15m chart", text_color=color.yellow, text_size=size.small)

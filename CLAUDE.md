@@ -4,7 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Single-file TradingView Pine Script v5 indicator: `BB_Dual_Mode_RSI_MACD_Regime.pine`. No build system, tests, or dependencies — the script is copied directly into the TradingView Pine Editor.
+TradingView Pine Script v5 indicator and strategy. No build system, tests, or dependencies — scripts are copied directly into the TradingView Pine Editor.
+
+- `BB_Dual_Mode_RSI_MACD_Regime.pine` — Indicator version (visual signals + alerts).
+- `BB_Dual_Mode_RSI_MACD_Regime_Strategy.pine` — Strategy version (same signal logic, adds `strategy.entry`/`strategy.close` for backtesting via TradingView's Strategy Tester).
 
 ## Architecture
 
@@ -23,5 +26,5 @@ The indicator combines two timeframes into a scored signal system:
 - Pine Script v5 syntax — use `ta.*` and `math.*` namespaces, not legacy function calls.
 - `request.security()` must use `barmerge.lookahead_off` to avoid future data leaks.
 - RSI and MACD are computed on the HTF timeframe; both must agree for a directional regime classification.
-- `alertcondition()` messages are static strings — Pine does not support dynamic interpolation in alert messages.
-- `max_labels_count=500` is set on the indicator declaration to support text labels.
+- `alertcondition()` messages are static strings — Pine does not support dynamic interpolation in alert messages. Not allowed in strategies; use TradingView's built-in strategy alerts instead.
+- `max_labels_count=500` is set on the indicator declaration to support text labels (not needed in the strategy version).
