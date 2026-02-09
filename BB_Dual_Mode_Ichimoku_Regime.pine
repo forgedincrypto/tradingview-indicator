@@ -1,9 +1,9 @@
 // This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0
 // https://mozilla.org/MPL/2.0/
-// © BB Dual Mode + 1H Ichimoku Regime Weight (Directional)
+// © BB Dual Mode + 1H RSI/MACD Regime Weight (Directional)
 
 //@version=5
-indicator("BB Dual Mode + 1H Ichimoku Regime Weight (Directional)", overlay=true, max_labels_count=500)
+indicator("BB Dual Mode + 1H RSI/MACD Regime Weight (Directional)", overlay=true, max_labels_count=500)
 
 // ──────────────────────────────────────────────────────────────────────────────
 // 1. INPUTS
@@ -15,12 +15,15 @@ bbLen  = input.int(20, "BB Length", minval=2, group=grpBB)
 bbMult = input.float(2.0, "BB Multiplier", minval=0.1, step=0.1, group=grpBB)
 bbSrc  = input.source(close, "BB Source", group=grpBB)
 
-// B) Ichimoku (1H)
-grpICH = "Ichimoku (1H)"
-htfTf      = input.timeframe("60", "HTF Timeframe", group=grpICH)
-tenkanLen  = input.int(9, "Tenkan Length", minval=1, group=grpICH)
-kijunLen   = input.int(26, "Kijun Length", minval=1, group=grpICH)
-senkouBLen = input.int(52, "Senkou B Length", minval=1, group=grpICH)
+// B) RSI + MACD (1H)
+grpRM = "RSI + MACD (1H)"
+htfTf      = input.timeframe("60", "HTF Timeframe", group=grpRM)
+rsiLen     = input.int(14, "RSI Length", minval=1, group=grpRM)
+rsiBullLevel = input.int(50, "RSI Bullish Threshold", minval=1, maxval=100, group=grpRM)
+rsiBearLevel = input.int(50, "RSI Bearish Threshold", minval=1, maxval=100, group=grpRM)
+macdFast   = input.int(12, "MACD Fast Length", minval=1, group=grpRM)
+macdSlow   = input.int(26, "MACD Slow Length", minval=1, group=grpRM)
+macdSignal = input.int(9, "MACD Signal Length", minval=1, group=grpRM)
 
 // C) Scoring threshold + display
 grpDisp = "Display"
@@ -46,21 +49,21 @@ brkShortSide = input.float(0.3, "Brk Short — Sideways", minval=0.0, maxval=2.0
 brkShortBear = input.float(1.0, "Brk Short — Bearish",  minval=0.0, maxval=2.0, step=0.1, group=grpBrkW)
 
 // ──────────────────────────────────────────────────────────────────────────────
-// 2. 1H ICHIMOKU REGIME (non-repainting)
+// 2. 1H RSI/MACD REGIME (non-repainting)
 // ──────────────────────────────────────────────────────────────────────────────
 
-// Compute Ichimoku components and regime on HTF, return as single int.
+// Compute RSI and MACD on HTF, return regime as single int.
+// Both must agree for a directional regime; otherwise sideways.
 // Using confirmed (closed) HTF bars only — lookahead_off prevents future leak.
 htfRegime() =>
-    _tenkan  = (ta.highest(high, tenkanLen) + ta.lowest(low, tenkanLen)) / 2
-    _kijun   = (ta.highest(high, kijunLen)  + ta.lowest(low, kijunLen))  / 2
-    _senkouA = (_tenkan + _kijun) / 2
-    _senkouB = (ta.highest(high, senkouBLen) + ta.lowest(low, senkouBLen)) / 2
-    _cloudTop = math.max(_senkouA, _senkouB)
-    _cloudBot = math.min(_senkouA, _senkouB)
-    // No forward shift — decisions use current-bar cloud, not displaced cloud
-    _bull = close > _cloudTop and _tenkan > _kijun
-    _bear = close < _cloudBot and _tenkan < _kijun
+    _rsi = ta.rsi(close, rsiLen)
+    [_macdLine, _signalLine, _] = ta.macd(close, macdFast, macdSlow, macdSignal)
+    _rsiBull = _rsi > rsiBullLevel
+    _rsiBear = _rsi < rsiBearLevel
+    _macdBull = _macdLine > _signalLine
+    _macdBear = _macdLine < _signalLine
+    _bull = _rsiBull and _macdBull
+    _bear = _rsiBear and _macdBear
     _regime = _bull ? 1 : _bear ? -1 : 0
     _regime
 
@@ -120,7 +123,7 @@ regimeColor = regime == 1 ? color.green : regime == -1 ? color.red : color.gray
 
 var table regimeTable = table.new(position.top_right, 1, 1, bgcolor=color.new(color.black, 70), border_width=1)
 if barstate.islast
-    table.cell(regimeTable, 0, 0, "1H Regime: " + regimeText, text_color=regimeColor, text_size=size.normal)
+    table.cell(regimeTable, 0, 0, "1H RSI/MACD: " + regimeText, text_color=regimeColor, text_size=size.normal)
 
 // B) Plot shapes for qualified signals
 // Mean Reversion — triangles
