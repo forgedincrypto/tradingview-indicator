@@ -30,6 +30,18 @@ grpDisp = "Display"
 minScoreToShow = input.float(0.5, "Min Score to Show Signal", minval=0.0, maxval=1.0, step=0.1, group=grpDisp)
 showTextLabels = input.bool(false, "Show Text Labels", group=grpDisp)
 
+// E) Risk Management
+grpRisk = "Risk Management"
+atrLen     = input.int(14, "ATR Length", minval=1, group=grpRisk)
+slMult     = input.float(1.5, "Stop Loss (ATR Mult)", minval=0.1, step=0.1, group=grpRisk)
+tpMult     = input.float(2.0, "Take Profit (ATR Mult — Breakout)", minval=0.1, step=0.1, group=grpRisk)
+revTpBasis = input.bool(true, "Rev TP at BB Basis", tooltip="Mean reversion trades target BB basis instead of ATR TP", group=grpRisk)
+
+// F) ATR Volatility Filter
+grpFilt = "ATR Filter"
+useAtrFilter  = input.bool(true, "Enable ATR Filter", group=grpFilt)
+atrFilterLen  = input.int(20, "ATR Filter SMA Length", minval=1, group=grpFilt)
+
 // D) Weights — Mean Reversion (directional)
 grpRevW = "Weights: Mean Reversion"
 revLongBull  = input.float(1.0, "Rev Long  — Bullish",  minval=0.0, maxval=2.0, step=0.1, group=grpRevW)
@@ -84,6 +96,14 @@ pLower = plot(lower, "BB Lower", color=color.new(color.blue, 0), linewidth=1)
 fill(pUpper, pLower, color=color.new(color.blue, 92), title="BB Fill")
 
 // ──────────────────────────────────────────────────────────────────────────────
+// 3B. ATR + VOLATILITY FILTER
+// ──────────────────────────────────────────────────────────────────────────────
+
+atrVal = ta.atr(atrLen)
+atrSma = ta.sma(atrVal, atrFilterLen)
+atrOk  = not useAtrFilter or (atrVal > atrSma)
+
+// ──────────────────────────────────────────────────────────────────────────────
 // 4. SIGNAL DEFINITIONS
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -108,10 +128,10 @@ brkLongScore  = scoreForRegime(regime, brkLongBull,  brkLongSide,  brkLongBear)
 brkShortScore = scoreForRegime(regime, brkShortBull, brkShortSide, brkShortBear)
 
 // Qualification: signal fired AND score meets threshold
-revLongQ  = revLong  and revLongScore  >= minScoreToShow
-revShortQ = revShort and revShortScore >= minScoreToShow
-brkLongQ  = brkLong  and brkLongScore  >= minScoreToShow
-brkShortQ = brkShort and brkShortScore >= minScoreToShow
+revLongQ  = revLong  and revLongScore  >= minScoreToShow and atrOk
+revShortQ = revShort and revShortScore >= minScoreToShow and atrOk
+brkLongQ  = brkLong  and brkLongScore  >= minScoreToShow and atrOk
+brkShortQ = brkShort and brkShortScore >= minScoreToShow and atrOk
 
 // ──────────────────────────────────────────────────────────────────────────────
 // 5B. STRATEGY ENTRIES / EXITS
@@ -122,22 +142,28 @@ if revLongQ
     strategy.close("REV Short")
     strategy.close("BRK Short")
     strategy.entry("REV Long", strategy.long)
+    _tp = revTpBasis ? basis : close + atrVal * tpMult
+    strategy.exit("REV Long Exit", "REV Long", stop=close - atrVal * slMult, limit=_tp)
 
 if brkLongQ
     strategy.close("REV Short")
     strategy.close("BRK Short")
     strategy.entry("BRK Long", strategy.long)
+    strategy.exit("BRK Long Exit", "BRK Long", stop=close - atrVal * slMult, limit=close + atrVal * tpMult)
 
 // Short signals
 if revShortQ
     strategy.close("REV Long")
     strategy.close("BRK Long")
     strategy.entry("REV Short", strategy.short)
+    _tp = revTpBasis ? basis : close - atrVal * tpMult
+    strategy.exit("REV Short Exit", "REV Short", stop=close + atrVal * slMult, limit=_tp)
 
 if brkShortQ
     strategy.close("REV Long")
     strategy.close("BRK Long")
     strategy.entry("BRK Short", strategy.short)
+    strategy.exit("BRK Short Exit", "BRK Short", stop=close + atrVal * slMult, limit=close - atrVal * tpMult)
 
 // ──────────────────────────────────────────────────────────────────────────────
 // 6. VISUAL OUTPUTS
