@@ -1,9 +1,9 @@
 // This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0
 // https://mozilla.org/MPL/2.0/
-// © BB Dual Mode + 1H RSI/MACD Regime Weight (Directional) — Strategy
+// © BB Dual Mode + 30m RSI/MACD Regime Weight (Directional) — Strategy
 
 //@version=5
-strategy("BB Dual Mode + 1H RSI/MACD Regime (Strategy)", overlay=true, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=100, commission_type=strategy.commission.percent, commission_value=0.1, pyramiding=0)
+strategy("BB Dual Mode + 30m RSI/MACD Regime (Strategy)", overlay=true, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=100, commission_type=strategy.commission.percent, commission_value=0.1, pyramiding=0)
 
 // ──────────────────────────────────────────────────────────────────────────────
 // 1. INPUTS
@@ -15,9 +15,9 @@ bbLen  = input.int(20, "BB Length", minval=2, group=grpBB)
 bbMult = input.float(2.0, "BB Multiplier", minval=0.1, step=0.1, group=grpBB)
 bbSrc  = input.source(close, "BB Source", group=grpBB)
 
-// B) RSI + MACD (1H)
-grpRM = "RSI + MACD (1H)"
-htfTf      = input.timeframe("60", "HTF Timeframe", group=grpRM)
+// B) RSI + MACD (30m)
+grpRM = "RSI + MACD (30m)"
+htfTf      = input.timeframe("30", "HTF Timeframe", group=grpRM)
 rsiLen     = input.int(14, "RSI Length", minval=1, group=grpRM)
 rsiBullLevel = input.int(50, "RSI Bullish Threshold", minval=1, maxval=100, group=grpRM)
 rsiBearLevel = input.int(50, "RSI Bearish Threshold", minval=1, maxval=100, group=grpRM)
@@ -49,7 +49,7 @@ brkShortSide = input.float(0.3, "Brk Short — Sideways", minval=0.0, maxval=2.0
 brkShortBear = input.float(1.0, "Brk Short — Bearish",  minval=0.0, maxval=2.0, step=0.1, group=grpBrkW)
 
 // ──────────────────────────────────────────────────────────────────────────────
-// 2. 1H RSI/MACD REGIME (non-repainting)
+// 2. 30m RSI/MACD REGIME (non-repainting)
 // ──────────────────────────────────────────────────────────────────────────────
 
 // Compute RSI and MACD on HTF, return regime as single int.
@@ -149,7 +149,7 @@ regimeColor = regime == 1 ? color.green : regime == -1 ? color.red : color.gray
 
 var table regimeTable = table.new(position.top_right, 1, 1, bgcolor=color.new(color.black, 70), border_width=1)
 if barstate.islast
-    table.cell(regimeTable, 0, 0, "1H RSI/MACD: " + regimeText, text_color=regimeColor, text_size=size.normal)
+    table.cell(regimeTable, 0, 0, "30m RSI/MACD: " + regimeText, text_color=regimeColor, text_size=size.normal)
 
 // B) Plot shapes for qualified signals
 // Mean Reversion — triangles
