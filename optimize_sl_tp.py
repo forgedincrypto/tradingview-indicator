@@ -227,6 +227,7 @@ def detect_candlestick_patterns(df: pd.DataFrame) -> pd.DataFrame:
 
     atr = df["atr"].values
     df["strong_bull_candle"] = (body > 0.7 * atr) & (wick_pct < 0.15) & (body > 0)
+    df["moderate_bull_candle"] = (body > 0.4 * atr) & (body > 0)
     df["strong_bear_candle"] = ((-body) > 0.7 * atr) & (wick_pct < 0.15) & (body < 0)
 
     return df
@@ -258,7 +259,7 @@ def qualify_signals(df: pd.DataFrame, use_patterns: bool = False) -> pd.DataFram
     if use_patterns:
         rev_long_confirm  = df["bullish_engulfing"] | df["hammer"]
         rev_short_confirm = df["bearish_engulfing"] | df["shooting_star"]
-        brk_long_confirm  = df["strong_bull_candle"]
+        brk_long_confirm  = df["moderate_bull_candle"]
         brk_short_confirm = df["strong_bear_candle"]
 
         df["rev_long_q"]  = df["rev_long_q"]  & rev_long_confirm

@@ -115,6 +115,10 @@ isShootingStar() =>
     _upperWick = high - math.max(open, close)
     _range > 0 and _body <= _range * 0.35 and _upperWick >= _range * 0.60 and close <= open
 
+isModerateBullishCandle() =>
+    _body = close - open
+    _body > 0.4 * atrVal
+
 isStrongBullishCandle() =>
     _body = close - open
     _range = high - low
@@ -158,7 +162,7 @@ brkShortScore = scoreForRegime(regime, brkShortBull, brkShortSide, brkShortBear)
 // Pattern confirmation (bypassed when toggle is off)
 revLongConfirm  = not usePatternConfirm or isBullishEngulfing() or isHammer()
 revShortConfirm = not usePatternConfirm or isBearishEngulfing() or isShootingStar()
-brkLongConfirm  = not usePatternConfirm or isStrongBullishCandle()
+brkLongConfirm  = not usePatternConfirm or isModerateBullishCandle()
 brkShortConfirm = not usePatternConfirm or isStrongBearishCandle()
 
 // Qualification: signal fired AND score meets threshold AND pattern confirmed
