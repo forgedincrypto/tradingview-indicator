@@ -42,8 +42,8 @@ usePatternConfirm = input.bool(true, "Require Pattern Confirmation", tooltip="Fi
 grpVol = "Volume Filter"
 useVolFilter = input.bool(true, "Enable Volume Filter", group=grpVol)
 volLen       = input.int(20, "Volume SMA Length", minval=1, group=grpVol)
-volMultBrk   = input.float(1.5, "Vol Mult (Breakout)", minval=0.1, step=0.1, group=grpVol)
-volMultRev   = input.float(1.2, "Vol Mult (Reversion)", minval=0.1, step=0.1, group=grpVol)
+volMultBrk   = input.float(2.0, "Vol Mult (Breakout)", minval=0.1, step=0.1, group=grpVol)
+volMultRev   = input.float(1.0, "Vol Mult (Reversion)", minval=0.1, step=0.1, group=grpVol)
 
 // D) Weights — Mean Reversion (directional)
 grpRevW = "Weights: Mean Reversion"

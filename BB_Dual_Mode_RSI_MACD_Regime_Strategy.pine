@@ -33,7 +33,7 @@ showTextLabels = input.bool(false, "Show Text Labels", group=grpDisp)
 // E) Risk Management
 grpRisk = "Risk Management"
 atrLen     = input.int(14, "ATR Length", minval=1, group=grpRisk)
-slMult     = input.float(1.5, "Stop Loss (ATR Mult)", minval=0.1, step=0.1, group=grpRisk)
+slMult     = input.float(2.25, "Stop Loss (ATR Mult)", minval=0.1, step=0.1, group=grpRisk)
 tpMult     = input.float(2.0, "Take Profit (ATR Mult — Breakout)", minval=0.1, step=0.1, group=grpRisk)
 revTpBasis = input.bool(true, "Rev TP at BB Basis", tooltip="Mean reversion trades target BB basis instead of ATR TP", group=grpRisk)
 
@@ -50,8 +50,8 @@ usePatternConfirm = input.bool(true, "Require Pattern Confirmation", tooltip="Fi
 grpVol = "Volume Filter"
 useVolFilter = input.bool(true, "Enable Volume Filter", group=grpVol)
 volLen       = input.int(20, "Volume SMA Length", minval=1, group=grpVol)
-volMultBrk   = input.float(1.5, "Vol Mult (Breakout)", minval=0.1, step=0.1, group=grpVol)
-volMultRev   = input.float(1.2, "Vol Mult (Reversion)", minval=0.1, step=0.1, group=grpVol)
+volMultBrk   = input.float(2.0, "Vol Mult (Breakout)", minval=0.1, step=0.1, group=grpVol)
+volMultRev   = input.float(1.0, "Vol Mult (Reversion)", minval=0.1, step=0.1, group=grpVol)
 
 // D) Weights — Mean Reversion (directional)
 grpRevW = "Weights: Mean Reversion"
