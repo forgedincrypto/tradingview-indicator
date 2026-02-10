@@ -46,6 +46,13 @@ atrFilterLen  = input.int(20, "ATR Filter SMA Length", minval=1, group=grpFilt)
 grpPat = "Candlestick Patterns"
 usePatternConfirm = input.bool(true, "Require Pattern Confirmation", tooltip="Filter entries to only those confirmed by candlestick patterns", group=grpPat)
 
+// H) Volume Filter
+grpVol = "Volume Filter"
+useVolFilter = input.bool(true, "Enable Volume Filter", group=grpVol)
+volLen       = input.int(20, "Volume SMA Length", minval=1, group=grpVol)
+volMultBrk   = input.float(1.5, "Vol Mult (Breakout)", minval=0.1, step=0.1, group=grpVol)
+volMultRev   = input.float(1.2, "Vol Mult (Reversion)", minval=0.1, step=0.1, group=grpVol)
+
 // D) Weights — Mean Reversion (directional)
 grpRevW = "Weights: Mean Reversion"
 revLongBull  = input.float(1.0, "Rev Long  — Bullish",  minval=0.0, maxval=2.0, step=0.1, group=grpRevW)
@@ -106,6 +113,11 @@ fill(pUpper, pLower, color=color.new(color.blue, 92), title="BB Fill")
 atrVal = ta.atr(atrLen)
 atrSma = ta.sma(atrVal, atrFilterLen)
 atrOk  = not useAtrFilter or (atrVal > atrSma)
+
+// Volume filter
+volSma   = ta.sma(volume, volLen)
+volOkBrk = not useVolFilter or (volume > volSma * volMultBrk)
+volOkRev = not useVolFilter or (volume > volSma * volMultRev)
 
 // ──────────────────────────────────────────────────────────────────────────────
 // 3C. CANDLESTICK PATTERN DETECTION
@@ -180,10 +192,10 @@ brkLongConfirm  = not usePatternConfirm or isModerateBullishCandle()
 brkShortConfirm = not usePatternConfirm or isStrongBearishCandle()
 
 // Qualification: signal fired AND score meets threshold AND pattern confirmed
-revLongQ  = revLong  and revLongScore  >= minScoreToShow and atrOk and revLongConfirm
-revShortQ = revShort and revShortScore >= minScoreToShow and atrOk and revShortConfirm
-brkLongQ  = brkLong  and brkLongScore  >= minScoreToShow and atrOk and brkLongConfirm
-brkShortQ = brkShort and brkShortScore >= minScoreToShow and atrOk and brkShortConfirm
+revLongQ  = revLong  and revLongScore  >= minScoreToShow and atrOk and revLongConfirm  and volOkRev
+revShortQ = revShort and revShortScore >= minScoreToShow and atrOk and revShortConfirm and volOkRev
+brkLongQ  = brkLong  and brkLongScore  >= minScoreToShow and atrOk and brkLongConfirm  and volOkBrk
+brkShortQ = brkShort and brkShortScore >= minScoreToShow and atrOk and brkShortConfirm and volOkBrk
 
 // ──────────────────────────────────────────────────────────────────────────────
 // 5B. STRATEGY ENTRIES / EXITS

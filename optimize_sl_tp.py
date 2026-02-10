@@ -57,6 +57,12 @@ TP_RANGE = np.arange(0.5, 4.01, 0.25)
 REV_TP_BASIS = [True, False]
 USE_PATTERNS = [True, False]
 
+# Volume filter
+VOL_LEN = 20  # Fixed — no need to sweep
+VOL_MULT_BRK_RANGE = [1.0, 1.5, 2.0]
+VOL_MULT_REV_RANGE = [1.0, 1.2, 1.5]
+USE_VOL_FILTER = [True, False]
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # DATA FETCHING
@@ -182,6 +188,9 @@ def compute_15m_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["atr_sma"] = df["atr"].rolling(ATR_FILTER_LEN).mean()
     df["atr_ok"] = df["atr"] > df["atr_sma"]
 
+    # Volume SMA (for volume filter)
+    df["vol_sma"] = df["volume"].rolling(VOL_LEN).mean()
+
     # Signals (vectorized)
     prev_close = df["close"].shift(1)
     prev_lower = df["bb_lower"].shift(1)
@@ -241,8 +250,11 @@ def score_for_regime(regime: int, w: dict) -> float:
     return w["side"]
 
 
-def qualify_signals(df: pd.DataFrame, use_patterns: bool = False) -> pd.DataFrame:
-    """Apply regime weights, minScore filter, and optional pattern confirmation."""
+def qualify_signals(df: pd.DataFrame, use_patterns: bool = False,
+                    use_vol_filter: bool = False,
+                    vol_mult_brk: float = 1.5,
+                    vol_mult_rev: float = 1.2) -> pd.DataFrame:
+    """Apply regime weights, minScore filter, optional pattern and volume confirmation."""
     df = df.copy()
 
     # Vectorized scoring
@@ -267,6 +279,15 @@ def qualify_signals(df: pd.DataFrame, use_patterns: bool = False) -> pd.DataFram
         df["brk_long_q"]  = df["brk_long_q"]  & brk_long_confirm
         df["brk_short_q"] = df["brk_short_q"] & brk_short_confirm
 
+    # Apply volume filter
+    if use_vol_filter:
+        vol_ok_brk = df["volume"] > df["vol_sma"] * vol_mult_brk
+        vol_ok_rev = df["volume"] > df["vol_sma"] * vol_mult_rev
+        df["rev_long_q"]  &= vol_ok_rev
+        df["rev_short_q"] &= vol_ok_rev
+        df["brk_long_q"]  &= vol_ok_brk
+        df["brk_short_q"] &= vol_ok_brk
+
     return df
 
 
@@ -275,7 +296,10 @@ def qualify_signals(df: pd.DataFrame, use_patterns: bool = False) -> pd.DataFram
 # ═════════════════════════════════════════════════════════════════════════════
 
 def run_backtest(df: pd.DataFrame, sl_mult: float, tp_mult: float,
-                 rev_tp_basis: bool, use_patterns: bool = False) -> dict:
+                 rev_tp_basis: bool, use_patterns: bool = False,
+                 use_vol_filter: bool = False,
+                 vol_mult_brk: float = 1.5,
+                 vol_mult_rev: float = 1.2) -> dict:
     """
     Simulate the Pine strategy bar-by-bar.
 
@@ -442,6 +466,9 @@ def run_backtest(df: pd.DataFrame, sl_mult: float, tp_mult: float,
         "tp_mult": tp_mult,
         "rev_tp_basis": rev_tp_basis,
         "use_patterns": use_patterns,
+        "use_vol_filter": use_vol_filter,
+        "vol_mult_brk": vol_mult_brk,
+        "vol_mult_rev": vol_mult_rev,
         "total_return": round(total_return, 2),
         "win_rate": round(win_rate, 1),
         "max_drawdown": round(max_drawdown, 2),
@@ -463,13 +490,13 @@ def main():
     print("=" * 70)
 
     # 1) Fetch data
-    print("\n[1/4] Fetching data ...")
+    print("\n[1/6] Fetching data ...")
     df15 = fetch_ohlcv("SOL/USDT", "15m", CACHE_15M, days=180)
     df30 = fetch_ohlcv("SOL/USDT", "30m", CACHE_30M, days=180)
     print(f"  15m bars: {len(df15):,}  |  30m bars: {len(df30):,}")
 
     # 2) Compute indicators
-    print("\n[2/5] Computing indicators ...")
+    print("\n[2/6] Computing indicators ...")
     df30 = compute_30m_regime(df30)
     df15 = compute_15m_indicators(df15)
     df15 = detect_candlestick_patterns(df15)
@@ -479,37 +506,54 @@ def main():
     df15 = df15.iloc[30:].reset_index(drop=True)
     print(f"  Working bars: {len(df15):,}")
 
-    # Build qualified dataframes for both modes
-    df15_no_pat = qualify_signals(df15, use_patterns=False)
-    df15_pat    = qualify_signals(df15, use_patterns=True)
+    # 3) Pre-qualify for each (pattern, volume) combination
+    print("\n[3/6] Pre-qualifying signals ...")
+    vol_combos = list(itertools.product(USE_PATTERNS, USE_VOL_FILTER,
+                                        VOL_MULT_BRK_RANGE, VOL_MULT_REV_RANGE))
+    qualified_cache = {}
+    for use_pat, use_vol, vmb, vmr in vol_combos:
+        # When volume filter is off, multipliers don't matter — cache once
+        cache_key = (use_pat, use_vol, vmb if use_vol else 0, vmr if use_vol else 0)
+        if cache_key in qualified_cache:
+            continue
+        qualified_cache[cache_key] = qualify_signals(
+            df15, use_patterns=use_pat,
+            use_vol_filter=use_vol, vol_mult_brk=vmb, vol_mult_rev=vmr
+        )
+    print(f"  Unique qualified sets: {len(qualified_cache)}")
 
-    # Count signals for both modes
-    print("\n  Signal counts (no patterns / with patterns):")
+    # Signal counts comparison
+    print("\n  Signal counts (no filters / patterns only / patterns+volume 1.5/1.2):")
+    df_base = qualified_cache[(False, False, 0, 0)]
+    df_pat  = qualified_cache[(True, False, 0, 0)]
+    df_full = qualified_cache.get((True, True, 1.5, 1.2), df_pat)
     for sig in ["rev_long_q", "rev_short_q", "brk_long_q", "brk_short_q"]:
-        n_no = df15_no_pat[sig].sum()
-        n_yes = df15_pat[sig].sum()
-        print(f"    {sig}: {n_no:>4} / {n_yes:>4}")
+        n_base = df_base[sig].sum()
+        n_pat  = df_pat[sig].sum()
+        n_full = df_full[sig].sum()
+        print(f"    {sig}: {n_base:>4} / {n_pat:>4} / {n_full:>4}")
 
-    # 3) Grid search
-    combos = list(itertools.product(SL_RANGE, TP_RANGE, REV_TP_BASIS, USE_PATTERNS))
-    print(f"\n[3/5] Running grid search ({len(combos)} combinations) ...")
+    # 4) Grid search
+    combos = list(itertools.product(SL_RANGE, TP_RANGE, REV_TP_BASIS,
+                                    USE_PATTERNS, USE_VOL_FILTER,
+                                    VOL_MULT_BRK_RANGE, VOL_MULT_REV_RANGE))
+    print(f"\n[4/6] Running grid search ({len(combos)} combinations) ...")
     t0 = time.time()
 
     results = []
-    for sl, tp, rev_basis, use_pat in combos:
-        df_run = df15_pat if use_pat else df15_no_pat
-        res = run_backtest(df_run, sl, tp, rev_basis, use_pat)
+    for sl, tp, rev_basis, use_pat, use_vol, vmb, vmr in combos:
+        cache_key = (use_pat, use_vol, vmb if use_vol else 0, vmr if use_vol else 0)
+        df_run = qualified_cache[cache_key]
+        res = run_backtest(df_run, sl, tp, rev_basis, use_pat,
+                           use_vol, vmb, vmr)
         results.append(res)
 
     elapsed = time.time() - t0
     print(f"  Done in {elapsed:.1f}s")
 
-    # 4) Pattern impact comparison
-    print("\n[4/5] Pattern Impact Comparison")
+    # 5) Filter impact comparison
+    print("\n[5/6] Filter Impact Comparison")
     rdf = pd.DataFrame(results)
-
-    rdf_no_pat = rdf[~rdf["use_patterns"]].copy()
-    rdf_pat    = rdf[rdf["use_patterns"]].copy()
 
     def summarize_group(group, label):
         valid = group[group["n_trades"] >= 5]
@@ -525,41 +569,56 @@ def main():
         pos = valid[valid["total_return"] > 0]
         print(f"    Positive-return combos: {len(pos)} / {len(valid)}")
 
+    # Pattern impact
+    rdf_no_pat = rdf[~rdf["use_patterns"]].copy()
+    rdf_pat    = rdf[rdf["use_patterns"]].copy()
     summarize_group(rdf_no_pat, "WITHOUT patterns")
     summarize_group(rdf_pat,    "WITH patterns")
 
-    # 5) Results
-    print("\n[5/5] Results")
+    # Volume filter impact
+    print()
+    rdf_no_vol = rdf[~rdf["use_vol_filter"]].copy()
+    rdf_vol    = rdf[rdf["use_vol_filter"]].copy()
+    summarize_group(rdf_no_vol, "WITHOUT volume filter")
+    summarize_group(rdf_vol,    "WITH volume filter")
 
-    # Use lower min-trades threshold for pattern mode (fewer trades expected)
+    # Combined: both patterns + volume
+    print()
+    rdf_both = rdf[rdf["use_patterns"] & rdf["use_vol_filter"]].copy()
+    rdf_neither = rdf[~rdf["use_patterns"] & ~rdf["use_vol_filter"]].copy()
+    summarize_group(rdf_neither, "NO filters (baseline)")
+    summarize_group(rdf_both,    "BOTH patterns + volume")
+
+    # 6) Results
+    print("\n[6/6] Results")
+
     rdf_valid = rdf[rdf["n_trades"] >= 5].copy()
     if len(rdf_valid) == 0:
         print("  WARNING: No combos with >= 5 trades. Showing all results.")
         rdf_valid = rdf.copy()
 
     # ── Top 20 by Profit Factor ─────────────────────────────────────────
-    print("\n" + "─" * 80)
+    print("\n" + "-" * 110)
     print("  TOP 20 by PROFIT FACTOR (min 5 trades)")
-    print("─" * 80)
+    print("-" * 110)
     top_pf = rdf_valid.sort_values("profit_factor", ascending=False).head(20)
     print(top_pf.to_string(index=False))
 
     # ── Top 10 by Sharpe Ratio ──────────────────────────────────────────
-    print("\n" + "─" * 80)
+    print("\n" + "-" * 110)
     print("  TOP 10 by SHARPE RATIO")
-    print("─" * 80)
+    print("-" * 110)
     top_sharpe = rdf_valid.sort_values("sharpe", ascending=False).head(10)
     print(top_sharpe.to_string(index=False))
 
     # ── Top 10 by Total Return ──────────────────────────────────────────
-    print("\n" + "─" * 80)
+    print("\n" + "-" * 110)
     print("  TOP 10 by TOTAL RETURN")
-    print("─" * 80)
+    print("-" * 110)
     top_ret = rdf_valid.sort_values("total_return", ascending=False).head(10)
     print(top_ret.to_string(index=False))
 
     # ── Best balanced pick ──────────────────────────────────────────────
-    # Rank by combined score: normalize PF + Sharpe + Return, penalize drawdown
     rdf_valid = rdf_valid.copy()
     for col in ["profit_factor", "sharpe", "total_return"]:
         mn, mx = rdf_valid[col].min(), rdf_valid[col].max()
@@ -584,6 +643,9 @@ def main():
     print(f"  tpMult          = {best['tp_mult']:.2f}")
     print(f"  revTpBasis      = {'true' if best['rev_tp_basis'] else 'false'}")
     print(f"  usePatternConf  = {'true' if best['use_patterns'] else 'false'}")
+    print(f"  useVolFilter    = {'true' if best['use_vol_filter'] else 'false'}")
+    print(f"  volMultBrk      = {best['vol_mult_brk']:.1f}")
+    print(f"  volMultRev      = {best['vol_mult_rev']:.1f}")
     print(f"  ────────────────────────────────")
     print(f"  Total Return = {best['total_return']:.2f}%")
     print(f"  Win Rate     = {best['win_rate']:.1f}%")
@@ -597,6 +659,7 @@ def main():
     print("\n  Parameter stability (top 10 composite — look for clustering):")
     stability = rdf_valid.sort_values("composite", ascending=False).head(10)[
         ["sl_mult", "tp_mult", "rev_tp_basis", "use_patterns",
+         "use_vol_filter", "vol_mult_brk", "vol_mult_rev",
          "profit_factor", "sharpe", "total_return", "n_trades"]
     ]
     print(stability.to_string(index=False))
@@ -607,8 +670,12 @@ def main():
     print(f'    tpMult          = input.float({best["tp_mult"]:.1f}, ...)')
     rev_str = "true" if best["rev_tp_basis"] else "false"
     pat_str = "true" if best["use_patterns"] else "false"
+    vol_str = "true" if best["use_vol_filter"] else "false"
     print(f'    revTpBasis      = input.bool({rev_str}, ...)')
     print(f'    usePatternConf  = input.bool({pat_str}, ...)')
+    print(f'    useVolFilter    = input.bool({vol_str}, ...)')
+    print(f'    volMultBrk      = input.float({best["vol_mult_brk"]:.1f}, ...)')
+    print(f'    volMultRev      = input.float({best["vol_mult_rev"]:.1f}, ...)')
 
 
 if __name__ == "__main__":
