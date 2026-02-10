@@ -42,6 +42,10 @@ grpFilt = "ATR Filter"
 useAtrFilter  = input.bool(true, "Enable ATR Filter", group=grpFilt)
 atrFilterLen  = input.int(20, "ATR Filter SMA Length", minval=1, group=grpFilt)
 
+// G) Candlestick Pattern Confirmation
+grpPat = "Candlestick Patterns"
+usePatternConfirm = input.bool(true, "Require Pattern Confirmation", tooltip="Filter entries to only those confirmed by candlestick patterns", group=grpPat)
+
 // D) Weights — Mean Reversion (directional)
 grpRevW = "Weights: Mean Reversion"
 revLongBull  = input.float(1.0, "Rev Long  — Bullish",  minval=0.0, maxval=2.0, step=0.1, group=grpRevW)
@@ -104,6 +108,44 @@ atrSma = ta.sma(atrVal, atrFilterLen)
 atrOk  = not useAtrFilter or (atrVal > atrSma)
 
 // ──────────────────────────────────────────────────────────────────────────────
+// 3C. CANDLESTICK PATTERN DETECTION
+// ──────────────────────────────────────────────────────────────────────────────
+
+isBullishEngulfing() =>
+    close[1] < open[1] and close > open and open <= close[1] and close >= open[1]
+
+isHammer() =>
+    _body = math.abs(close - open)
+    _range = high - low
+    _lowerWick = math.min(open, close) - low
+    _range > 0 and _body <= _range * 0.35 and _lowerWick >= _range * 0.60 and close >= open
+
+isBearishEngulfing() =>
+    close[1] > open[1] and close < open and open >= close[1] and close <= open[1]
+
+isShootingStar() =>
+    _body = math.abs(close - open)
+    _range = high - low
+    _upperWick = high - math.max(open, close)
+    _range > 0 and _body <= _range * 0.35 and _upperWick >= _range * 0.60 and close <= open
+
+isStrongBullishCandle() =>
+    _body = close - open
+    _range = high - low
+    _upperWick = high - close
+    _lowerWick = open - low
+    _maxWick = math.max(_upperWick, _lowerWick)
+    _body > 0.7 * atrVal and _range > 0 and _maxWick / _range < 0.15
+
+isStrongBearishCandle() =>
+    _body = open - close
+    _range = high - low
+    _upperWick = high - open
+    _lowerWick = close - low
+    _maxWick = math.max(_upperWick, _lowerWick)
+    _body > 0.7 * atrVal and _range > 0 and _maxWick / _range < 0.15
+
+// ──────────────────────────────────────────────────────────────────────────────
 // 4. SIGNAL DEFINITIONS
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -127,11 +169,17 @@ revShortScore = scoreForRegime(regime, revShortBull, revShortSide, revShortBear)
 brkLongScore  = scoreForRegime(regime, brkLongBull,  brkLongSide,  brkLongBear)
 brkShortScore = scoreForRegime(regime, brkShortBull, brkShortSide, brkShortBear)
 
-// Qualification: signal fired AND score meets threshold
-revLongQ  = revLong  and revLongScore  >= minScoreToShow and atrOk
-revShortQ = revShort and revShortScore >= minScoreToShow and atrOk
-brkLongQ  = brkLong  and brkLongScore  >= minScoreToShow and atrOk
-brkShortQ = brkShort and brkShortScore >= minScoreToShow and atrOk
+// Pattern confirmation (bypassed when toggle is off)
+revLongConfirm  = not usePatternConfirm or isBullishEngulfing() or isHammer()
+revShortConfirm = not usePatternConfirm or isBearishEngulfing() or isShootingStar()
+brkLongConfirm  = not usePatternConfirm or isStrongBullishCandle()
+brkShortConfirm = not usePatternConfirm or isStrongBearishCandle()
+
+// Qualification: signal fired AND score meets threshold AND pattern confirmed
+revLongQ  = revLong  and revLongScore  >= minScoreToShow and atrOk and revLongConfirm
+revShortQ = revShort and revShortScore >= minScoreToShow and atrOk and revShortConfirm
+brkLongQ  = brkLong  and brkLongScore  >= minScoreToShow and atrOk and brkLongConfirm
+brkShortQ = brkShort and brkShortScore >= minScoreToShow and atrOk and brkShortConfirm
 
 // ──────────────────────────────────────────────────────────────────────────────
 // 5B. STRATEGY ENTRIES / EXITS

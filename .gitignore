@@ -1,6 +1,9 @@
 # Claude Code
 .claude/
 
+# Data cache
+.cache/
+
 # OS
 Thumbs.db
 Desktop.ini
