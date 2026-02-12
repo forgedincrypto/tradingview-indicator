@@ -1,0 +1,371 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0
+// https://mozilla.org/MPL/2.0/
+// Fractal Adaptive Trend System (FATS) — AVAX Indicator
+//
+// OPTIMIZED DEFAULTS (4H AVAX/USDT):
+//   Return: +139.9% | PF: 2.75x | MaxDD: -16.5% | 41 trades | 12-mo backtest
+//   vs Buy & Hold: -66.4%
+//
+// 1H PRESET:
+//   erTrendThr=0.45, erChopThr=0.18, volThr=1.0, slMult=2.0,
+//   tpMult=3.5, trailMult=3.0, cooldownBars=3, useBurst=false
+//   Return: +23.9% | PF: 1.83x | MaxDD: -11.7% | 52 trades
+
+//@version=5
+indicator("Fractal Adaptive Trend System (FATS)", overlay=true, max_labels_count=500)
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 1. INPUTS
+// ──────────────────────────────────────────────────────────────────────────────
+
+// A) Fractal Efficiency Ratio
+grpFE       = "Fractal Efficiency"
+erLen       = input.int(10, "ER Lookback", minval=2, group=grpFE,
+                 tooltip="Bars to measure price path efficiency")
+erSmooth    = input.int(3, "ER Smoothing", minval=1, group=grpFE)
+erTrendThr  = input.float(0.38, "Trending Threshold", minval=0.1, maxval=0.9, step=0.02, group=grpFE,
+                 tooltip="Above this = trending regime. 4H optimal: 0.38 | 1H optimal: 0.45")
+erChopThr   = input.float(0.18, "Chop Threshold", minval=0.05, maxval=0.5, step=0.02, group=grpFE,
+                 tooltip="Below this = choppy, no entries. 4H optimal: 0.18 | 1H optimal: 0.18")
+
+// B) Volume-Weighted KAMA
+grpKAMA     = "Adaptive MA (KAMA)"
+kamaLen     = input.int(10, "KAMA Efficiency Length", minval=2, group=grpKAMA)
+kamaFast    = input.int(2, "Fast Smoothing Constant", minval=2, group=grpKAMA)
+kamaSlow    = input.int(30, "Slow Smoothing Constant", minval=10, group=grpKAMA)
+
+// C) Squeeze Detection
+grpSqz      = "Squeeze Detection"
+sqzBBLen    = input.int(20, "Squeeze BB Length", minval=5, group=grpSqz)
+sqzBBMult   = input.float(2.0, "Squeeze BB Multiplier", minval=0.5, step=0.1, group=grpSqz)
+sqzKCLen    = input.int(20, "Squeeze KC Length", minval=5, group=grpSqz)
+sqzKCMult   = input.float(1.5, "Squeeze KC Multiplier", minval=0.5, step=0.1, group=grpSqz)
+
+// D) Momentum
+grpMom      = "Momentum"
+momLen      = input.int(12, "Momentum Length", minval=2, group=grpMom)
+momSmooth   = input.int(3, "Momentum Smoothing", minval=1, group=grpMom)
+
+// E) Volume Filter
+grpVol      = "Volume"
+volLen      = input.int(20, "Volume MA Length", minval=5, group=grpVol)
+volThr      = input.float(2.5, "Volume Threshold (x avg)", minval=0.5, step=0.1, group=grpVol,
+                 tooltip="Volume must exceed this multiple of average. 4H optimal: 2.5 | 1H optimal: 1.0")
+
+// F) Entry Mode
+grpEntry    = "Entry Modes"
+useBurst    = input.bool(true, "Enable Volume Burst Entries", group=grpEntry,
+                 tooltip="ON for 4H (high-vol bursts are meaningful). OFF for 1H and below (too noisy)")
+useSqueeze  = input.bool(true, "Enable Squeeze Entries", group=grpEntry)
+useTrend    = input.bool(true, "Enable Trend Entries", group=grpEntry)
+
+// G) Higher Timeframe Trend Filter
+grpHTF      = "Higher Timeframe"
+useHTF      = input.bool(true, "Enable HTF Trend Filter", group=grpHTF)
+htfTF       = input.timeframe("D", "HTF Timeframe", group=grpHTF,
+                 tooltip="Daily for 4H chart, 4H for 1H chart")
+htfEmaLen   = input.int(50, "HTF EMA Length", minval=10, group=grpHTF)
+
+// H) Risk Management
+grpRisk     = "Risk Management"
+atrLen      = input.int(14, "ATR Length", minval=1, group=grpRisk)
+slMult      = input.float(2.0, "Stop Loss ATR Mult", minval=0.5, step=0.1, group=grpRisk,
+                 tooltip="Optimal across timeframes: 2.0x")
+tpMult      = input.float(5.0, "Take Profit ATR Mult", minval=0.5, step=0.1, group=grpRisk,
+                 tooltip="4H optimal: 5.0 | 1H optimal: 3.5 — let winners run")
+useTrail    = input.bool(true, "Use Trailing Stop", group=grpRisk)
+trailMult   = input.float(3.0, "Trail ATR Mult", minval=0.5, step=0.1, group=grpRisk,
+                 tooltip="Optimal: 3.0 — wide enough to survive pullbacks")
+adaptStops  = input.bool(true, "Adapt Stops to Regime", group=grpRisk)
+
+// I) Cooldown
+grpCool     = "Cooldown"
+useCooldown = input.bool(true, "Enable Post-Loss Cooldown", group=grpCool)
+cooldownBars = input.int(15, "Cooldown Bars After Stop", minval=1, maxval=50, group=grpCool,
+                 tooltip="4H optimal: 15 (=60 hours) | 1H optimal: 3")
+
+// J) Display
+grpDisp     = "Display"
+showLabels  = input.bool(false, "Show Text Labels", group=grpDisp)
+showLevels  = input.bool(true, "Show SL / TP / Trail Lines", group=grpDisp)
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 2. FRACTAL EFFICIENCY RATIO
+// ──────────────────────────────────────────────────────────────────────────────
+
+priceChange = math.abs(close - close[erLen])
+pathLength  = math.sum(math.abs(close - close[1]), erLen)
+rawER       = pathLength != 0 ? priceChange / pathLength : 0.0
+er          = ta.ema(rawER, erSmooth)
+
+isTrending  = er > erTrendThr
+isChoppy    = er < erChopThr
+isTransition = not isTrending and not isChoppy
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 3. VOLUME-WEIGHTED KAMA
+// ──────────────────────────────────────────────────────────────────────────────
+
+kamaER = math.abs(close - close[kamaLen]) / math.sum(math.abs(close - close[1]), kamaLen)
+fastSC = 2.0 / (kamaFast + 1.0)
+slowSC = 2.0 / (kamaSlow + 1.0)
+sc     = math.pow(nz(kamaER) * (fastSC - slowSC) + slowSC, 2)
+
+volMA    = ta.sma(volume, volLen)
+volRatio = volMA > 0 ? volume / volMA : 1.0
+volBoost = math.min(volRatio, 2.0)
+adjSC    = math.min(sc * (0.5 + 0.5 * volBoost), 1.0)
+
+var float kama = na
+if bar_index == 0
+    kama := close
+else
+    kama := nz(kama[1]) + adjSC * (close - nz(kama[1]))
+
+kamaSlope  = kama - kama[1]
+kamaBull   = kamaSlope > 0
+kamaBear   = kamaSlope < 0
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 4. SQUEEZE DETECTION
+// ──────────────────────────────────────────────────────────────────────────────
+
+sqzBasis  = ta.sma(close, sqzBBLen)
+sqzDev    = sqzBBMult * ta.stdev(close, sqzBBLen)
+sqzBBUp   = sqzBasis + sqzDev
+sqzBBLo   = sqzBasis - sqzDev
+
+sqzKCBasis = ta.sma(close, sqzKCLen)
+sqzKCRange = sqzKCMult * ta.atr(sqzKCLen)
+sqzKCUp    = sqzKCBasis + sqzKCRange
+sqzKCLo    = sqzKCBasis - sqzKCRange
+
+sqzOn   = sqzBBLo > sqzKCLo and sqzBBUp < sqzKCUp
+sqzOff  = not sqzOn
+sqzFire = sqzOn[1] and sqzOff
+
+sqzMom     = ta.linreg(close - sqzBasis, sqzBBLen, 0)
+sqzMomUp   = sqzMom > 0
+sqzMomDown = sqzMom < 0
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 5. MOMENTUM
+// ──────────────────────────────────────────────────────────────────────────────
+
+mom      = close - close[momLen]
+momSma   = ta.ema(mom, momSmooth)
+momAccel = momSma - momSma[1]
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 6. VOLUME CONFIRMATION
+// ──────────────────────────────────────────────────────────────────────────────
+
+volConfirm = volume > volMA * volThr
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 7. HIGHER TIMEFRAME TREND FILTER
+// ──────────────────────────────────────────────────────────────────────────────
+
+htfEma   = request.security(syminfo.tickerid, htfTF, ta.ema(close, htfEmaLen), barmerge.gaps_off, barmerge.lookahead_off)
+htfClose = request.security(syminfo.tickerid, htfTF, close, barmerge.gaps_off, barmerge.lookahead_off)
+htfTrend = htfClose > htfEma ? 1 : htfClose < htfEma ? -1 : 0
+
+htfLongOK  = useHTF ? htfTrend >= 0 : true
+htfShortOK = useHTF ? htfTrend <= 0 : true
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 8. ATR + ADAPTIVE STOPS
+// ──────────────────────────────────────────────────────────────────────────────
+
+atr = ta.atr(atrLen)
+
+slAdj = adaptStops ? (isTrending ? 1.15 : isTransition ? 0.85 : 1.0) : 1.0
+tpAdj = adaptStops ? (isTrending ? 1.25 : isTransition ? 0.80 : 1.0) : 1.0
+trAdj = adaptStops ? (isTrending ? 1.20 : isTransition ? 0.85 : 1.0) : 1.0
+
+effSL    = slMult * slAdj
+effTP    = tpMult * tpAdj
+effTrail = trailMult * trAdj
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 9. SIMULATED POSITION TRACKING + COOLDOWN
+// ──────────────────────────────────────────────────────────────────────────────
+// Indicator has no strategy.* functions, so we simulate position state to:
+//   - Suppress duplicate signals while "in" a trade
+//   - Show SL/TP/trail levels on chart
+//   - Track cooldown after simulated exits
+
+var int   pos          = 0       // 1 = long, -1 = short, 0 = flat
+var float entryPrice   = na
+var float stopPrice    = na
+var float tpPrice      = na
+var float trailPrice   = na
+var int   barsSinceExit = 100
+
+// Raw signal conditions (before position/cooldown gating)
+sqzLong    = useSqueeze and sqzFire and sqzMomUp and momAccel > 0
+trendLong  = useTrend and isTrending and kamaBull and ta.crossover(close, kama) and momSma > 0
+burstLong  = useBurst and volConfirm and close > kama and momSma > 0 and not isChoppy
+rawLong    = (sqzLong or trendLong or burstLong) and htfLongOK and not isChoppy
+
+sqzShort   = useSqueeze and sqzFire and sqzMomDown and momAccel < 0
+trendShort = useTrend and isTrending and kamaBear and ta.crossunder(close, kama) and momSma < 0
+burstShort = useBurst and volConfirm and close < kama and momSma < 0 and not isChoppy
+rawShort   = (sqzShort or trendShort or burstShort) and htfShortOK and not isChoppy
+
+cooldownOK = not useCooldown or barsSinceExit >= cooldownBars
+
+// Check simulated exits BEFORE entries (matching strategy execution order)
+// --- Long exit ---
+if pos == 1
+    effStop = useTrail ? math.max(nz(stopPrice), nz(trailPrice)) : stopPrice
+    if low <= effStop or high >= tpPrice or (isChoppy and er < erChopThr * 0.65)
+        pos          := 0
+        entryPrice   := na
+        stopPrice    := na
+        tpPrice      := na
+        trailPrice   := na
+        barsSinceExit := 0
+
+// --- Short exit ---
+if pos == -1
+    effStop = useTrail ? math.min(nz(stopPrice), nz(trailPrice)) : stopPrice
+    if high >= effStop or low <= tpPrice or (isChoppy and er < erChopThr * 0.65)
+        pos          := 0
+        entryPrice   := na
+        stopPrice    := na
+        tpPrice      := na
+        trailPrice   := na
+        barsSinceExit := 0
+
+// Gated entry signals (only fire when flat/opposite + cooldown OK)
+longEntry  = rawLong  and pos <= 0 and cooldownOK
+shortEntry = rawShort and pos >= 0 and cooldownOK
+
+// --- Process entries ---
+if longEntry
+    pos          := 1
+    entryPrice   := close
+    stopPrice    := close - effSL * atr
+    tpPrice      := close + effTP * atr
+    trailPrice   := close - effTrail * atr
+    barsSinceExit := 100
+
+if shortEntry
+    pos          := -1
+    entryPrice   := close
+    stopPrice    := close + effSL * atr
+    tpPrice      := close - effTP * atr
+    trailPrice   := close + effTrail * atr
+    barsSinceExit := 100
+
+// --- Trailing stop ratchet ---
+if pos == 1 and useTrail
+    newTrail   = close - effTrail * atr
+    trailPrice := math.max(nz(trailPrice), newTrail)
+
+if pos == -1 and useTrail
+    newTrail   = close + effTrail * atr
+    trailPrice := math.min(nz(trailPrice), newTrail)
+
+// Increment cooldown counter when flat
+if pos == 0
+    barsSinceExit += 1
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 10. PLOTTING
+// ──────────────────────────────────────────────────────────────────────────────
+
+// KAMA line
+kamaColor = kamaBull ? color.new(#00E676, 0) : kamaBear ? color.new(#FF1744, 0) : color.new(color.gray, 0)
+plot(kama, "KAMA", color=kamaColor, linewidth=2)
+
+// HTF EMA
+plot(useHTF ? htfEma : na, "HTF EMA", color=color.new(color.orange, 30), linewidth=1, style=plot.style_stepline)
+
+// Squeeze
+plotshape(sqzOn and not sqzOn[1], "Squeeze Start", shape.diamond, location.bottom, color.new(color.orange, 0), size=size.tiny)
+plotshape(sqzFire, "Squeeze Fire", shape.diamond, location.bottom, color.new(color.lime, 0), size=size.small)
+
+// Entry signals
+plotshape(longEntry, "Long Signal", shape.triangleup, location.belowbar, color.new(#00E676, 0), size=size.small)
+plotshape(shortEntry, "Short Signal", shape.triangledown, location.abovebar, color.new(#FF1744, 0), size=size.small)
+
+// Regime background
+bgColor = isTrending ? color.new(#00E676, 95) : isChoppy ? color.new(#FF1744, 95) : na
+bgcolor(bgColor, title="Regime Background")
+
+// SL / TP / Trail levels (while in simulated position)
+plot(showLevels and pos == 1 ? stopPrice : na, "Long Stop", color.new(color.red, 50), 1, plot.style_linebr)
+plot(showLevels and pos == 1 ? tpPrice : na, "Long TP", color.new(color.green, 50), 1, plot.style_linebr)
+plot(showLevels and pos == 1 and useTrail ? trailPrice : na, "Long Trail", color.new(color.yellow, 50), 1, plot.style_linebr)
+plot(showLevels and pos == -1 ? stopPrice : na, "Short Stop", color.new(color.red, 50), 1, plot.style_linebr)
+plot(showLevels and pos == -1 ? tpPrice : na, "Short TP", color.new(color.green, 50), 1, plot.style_linebr)
+plot(showLevels and pos == -1 and useTrail ? trailPrice : na, "Short Trail", color.new(color.yellow, 50), 1, plot.style_linebr)
+
+// Optional text labels with entry type
+if showLabels and longEntry
+    _type = sqzLong ? "SQZ" : trendLong ? "TRD" : "BUR"
+    label.new(bar_index, low, "L " + _type, style=label.style_label_up,
+         color=color.new(#00E676, 80), textcolor=color.new(#00E676, 0), size=size.small)
+if showLabels and shortEntry
+    _type = sqzShort ? "SQZ" : trendShort ? "TRD" : "BUR"
+    label.new(bar_index, high, "S " + _type, style=label.style_label_down,
+         color=color.new(#FF1744, 80), textcolor=color.new(#FF1744, 0), size=size.small)
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 11. ALERTS
+// ──────────────────────────────────────────────────────────────────────────────
+
+alertcondition(longEntry,  "FATS Long Entry",  "FATS: Long entry signal")
+alertcondition(shortEntry, "FATS Short Entry", "FATS: Short entry signal")
+alertcondition(longEntry or shortEntry, "FATS Any Entry", "FATS: Entry signal fired")
+alertcondition(sqzFire, "Squeeze Fire", "FATS: Squeeze released")
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 12. INFO TABLE
+// ──────────────────────────────────────────────────────────────────────────────
+
+var table infoTbl = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 80), border_width=1)
+if barstate.islast
+    erColor = isTrending ? color.lime : isChoppy ? color.red : color.yellow
+
+    table.cell(infoTbl, 0, 0, "Efficiency", text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 1, 0, str.tostring(er, "#.###"), text_color=erColor, text_size=size.small)
+
+    table.cell(infoTbl, 0, 1, "Regime", text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 1, 1, isTrending ? "TREND" : isChoppy ? "CHOP" : "MIXED", text_color=erColor, text_size=size.small)
+
+    table.cell(infoTbl, 0, 2, "Squeeze", text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 1, 2, sqzOn ? "ON" : "OFF", text_color=sqzOn ? color.orange : color.gray, text_size=size.small)
+
+    table.cell(infoTbl, 0, 3, "KAMA", text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 1, 3, kamaBull ? "BULL" : kamaBear ? "BEAR" : "FLAT",
+         text_color=kamaBull ? color.lime : kamaBear ? color.red : color.gray, text_size=size.small)
+
+    table.cell(infoTbl, 0, 4, "HTF Trend", text_color=color.white, text_size=size.small)
+    htfText = htfTrend == 1 ? "BULL" : htfTrend == -1 ? "BEAR" : "NEUTRAL"
+    table.cell(infoTbl, 1, 4, htfText,
+         text_color=htfTrend == 1 ? color.lime : htfTrend == -1 ? color.red : color.yellow, text_size=size.small)
+
+    table.cell(infoTbl, 0, 5, "Momentum", text_color=color.white, text_size=size.small)
+    momText = momAccel > 0 and momSma > 0 ? "ACCEL UP" : momAccel < 0 and momSma < 0 ? "ACCEL DN" : momSma > 0 ? "UP" : momSma < 0 ? "DN" : "FLAT"
+    table.cell(infoTbl, 1, 5, momText,
+         text_color=momSma > 0 ? color.lime : momSma < 0 ? color.red : color.gray, text_size=size.small)
+
+    table.cell(infoTbl, 0, 6, "Position", text_color=color.white, text_size=size.small)
+    posText = pos == 1 ? "LONG" : pos == -1 ? "SHORT" : "FLAT"
+    posColor = pos == 1 ? color.lime : pos == -1 ? color.red : color.gray
+    table.cell(infoTbl, 1, 6, posText, text_color=posColor, text_size=size.small)
+
+    table.cell(infoTbl, 0, 7, "Entries", text_color=color.white, text_size=size.small)
+    entryModes = (useSqueeze ? "Sq" : "") + (useTrend ? "+Tr" : "") + (useBurst ? "+Bu" : "")
+    table.cell(infoTbl, 1, 7, entryModes, text_color=color.white, text_size=size.small)
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 13. TIMEFRAME NOTICE
+// ──────────────────────────────────────────────────────────────────────────────
+
+var table tfNote = table.new(position.bottom_right, 1, 1, bgcolor=color.new(color.black, 70), border_width=1)
+if barstate.islast and timeframe.period != "240" and timeframe.period != "60"
+    table.cell(tfNote, 0, 0, "Optimized for 4H / 1H", text_color=color.yellow, text_size=size.small)
